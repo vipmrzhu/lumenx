@@ -32,7 +32,14 @@ export default function VideoGenerator() {
         model: defaultI2vModel,
         shotType: "single" as string,  // 'single' or 'multi' (only for wan2.6-i2v)
         generationMode: "i2v" as string,  // 'i2v' or 'r2v'
-        referenceVideoUrls: [] as string[]  // Reference videos for R2V (max 3)
+        referenceVideoUrls: [] as string[],  // Reference videos for R2V (max 3)
+        // Kling params
+        mode: "std" as string,
+        sound: false,
+        cfgScale: 0.5,
+        // Vidu params
+        viduAudio: true,
+        movementAmplitude: "auto" as string,
     });
 
     // Sync model from project settings when project changes

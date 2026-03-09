@@ -85,6 +85,8 @@ class KlingModel(VideoGenModel):
         aspect_ratio = kwargs.get("aspect_ratio", "16:9")
         negative_prompt = kwargs.get("negative_prompt", "")
         mode = kwargs.get("mode", "pro")
+        sound = kwargs.get("sound")  # "on" or "off"
+        cfg_scale = kwargs.get("cfg_scale")  # 0-1
 
         start_time = time.time()
 
@@ -120,6 +122,12 @@ class KlingModel(VideoGenModel):
             }
             submit_url = f"{BASE_URL}/videos/text2video"
             poll_base = f"{BASE_URL}/videos/text2video"
+
+        # Optional params
+        if sound is not None:
+            body["sound"] = sound
+        if cfg_scale is not None:
+            body["cfg_scale"] = cfg_scale
 
         # Submit task
         logger.info(f"[Kling] Submitting {'i2v' if is_i2v else 't2v'} task (model={model_name})")

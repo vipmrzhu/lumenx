@@ -20,28 +20,14 @@ import { useProjectStore } from "@/store/projectStore";
 import { api, API_URL, VideoTask } from "@/lib/api";
 import { getAssetUrl, getAssetUrlWithTimestamp } from "@/lib/utils";
 import PromptBuilder, { PromptSegment, PromptBuilderRef } from "./PromptBuilder";
+import type { VideoParams } from "@/store/projectStore";
 
 interface VideoCreatorProps {
     onTaskCreated: (project: any) => void;
     remixData: Partial<VideoTask> | null;
     onRemixClear: () => void;
-    params: {
-        resolution: string;
-        duration: number;
-        seed: number | undefined;
-        generateAudio: boolean;
-        audioUrl: string;
-        promptExtend: boolean;
-        negativePrompt: string;
-        batchSize: number;
-        cameraMovement: string;
-        subjectMotion: string;
-        model: string;
-        shotType: string;  // 'single' or 'multi' (only for wan2.6-i2v)
-        generationMode: string;  // 'i2v' or 'r2v'
-        referenceVideoUrls: string[];  // Reference videos for R2V
-    };
-    onParamsChange: (params: Partial<VideoCreatorProps['params']>) => void;
+    params: VideoParams;
+    onParamsChange: (params: Partial<VideoParams>) => void;
 }
 
 export default function VideoCreator({ onTaskCreated, remixData, onRemixClear, params, onParamsChange }: VideoCreatorProps) {
@@ -400,7 +386,14 @@ export default function VideoCreator({ onTaskCreated, remixData, onRemixClear, p
                     frameId,
                     params.shotType,
                     generationMode,  // Use local state
-                    referenceVideos  // Use cast slots
+                    referenceVideos,  // Use cast slots
+                    // Kling params
+                    params.mode,
+                    params.sound,
+                    params.cfgScale,
+                    // Vidu params
+                    params.viduAudio,
+                    params.movementAmplitude
                 );
             }
 

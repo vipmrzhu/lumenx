@@ -4,6 +4,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from typing import Optional, Dict, List, Any
 import asyncio
+import time
 from concurrent.futures import ThreadPoolExecutor
 from functools import partial
 import os
@@ -673,6 +674,13 @@ class CreateVideoTaskRequest(BaseModel):
     shot_type: str = "single"  # 'single' or 'multi' (only for wan2.6-i2v)
     generation_mode: str = "i2v"  # 'i2v' (image-to-video) or 'r2v' (reference-to-video)
     reference_video_urls: List[str] = []  # Reference video URLs for R2V (max 3)
+    # Kling params
+    mode: Optional[str] = None
+    sound: Optional[str] = None
+    cfg_scale: Optional[float] = None
+    # Vidu params
+    vidu_audio: Optional[bool] = None
+    movement_amplitude: Optional[str] = None
 
 
 async def process_video_task(script_id: str, task_id: str):
@@ -704,7 +712,12 @@ async def create_video_task(script_id: str, request: CreateVideoTaskRequest, bac
                 model=request.model,
                 shot_type=request.shot_type,
                 generation_mode=request.generation_mode,
-                reference_video_urls=request.reference_video_urls
+                reference_video_urls=request.reference_video_urls,
+                mode=request.mode,
+                sound=request.sound,
+                cfg_scale=request.cfg_scale,
+                vidu_audio=request.vidu_audio,
+                movement_amplitude=request.movement_amplitude,
             )
 
             # Find the created task object

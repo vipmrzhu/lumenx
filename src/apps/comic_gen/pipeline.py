@@ -1279,7 +1279,7 @@ class ComicGenPipeline:
         self._save_data()
         return script
 
-    def create_video_task(self, script_id: str, image_url: str, prompt: str, duration: int = 5, seed: int = None, resolution: str = "720p", generate_audio: bool = False, audio_url: str = None, prompt_extend: bool = True, negative_prompt: str = None, model: str = "wan2.6-i2v", frame_id: str = None, shot_type: str = "single", generation_mode: str = "i2v", reference_video_urls: list = None) -> Tuple[Script, str]:
+    def create_video_task(self, script_id: str, image_url: str, prompt: str, duration: int = 5, seed: int = None, resolution: str = "720p", generate_audio: bool = False, audio_url: str = None, prompt_extend: bool = True, negative_prompt: str = None, model: str = "wan2.6-i2v", frame_id: str = None, shot_type: str = "single", generation_mode: str = "i2v", reference_video_urls: list = None, mode: str = None, sound: str = None, cfg_scale: float = None, vidu_audio: bool = None, movement_amplitude: str = None) -> Tuple[Script, str]:
         """Creates a new video generation task."""
         script = self.get_script(script_id)
         if not script:
@@ -1336,6 +1336,11 @@ class ComicGenPipeline:
             shot_type=shot_type,
             generation_mode=generation_mode,
             reference_video_urls=reference_video_urls or [],
+            mode=mode,
+            sound=sound,
+            cfg_scale=cfg_scale,
+            vidu_audio=vidu_audio,
+            movement_amplitude=movement_amplitude,
             created_at=time.time()
         )
         
@@ -1903,6 +1908,9 @@ class ComicGenPipeline:
                     model=task.model,
                     negative_prompt=task.negative_prompt,
                     aspect_ratio="16:9",
+                    mode=task.mode or "std",
+                    sound=task.sound or "off",
+                    cfg_scale=task.cfg_scale,
                 )
             elif model_prefix in ("vidu", "viduq2", "viduq3"):
                 # Use Vidu model (cached)
@@ -1918,6 +1926,9 @@ class ComicGenPipeline:
                     model=task.model,
                     resolution=task.resolution,
                     aspect_ratio="16:9",
+                    seed=task.seed or 0,
+                    audio=task.vidu_audio if task.vidu_audio is not None else True,
+                    movement_amplitude=task.movement_amplitude or "auto",
                 )
             else:
                 # Default: Wanx model

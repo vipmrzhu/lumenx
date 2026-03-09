@@ -2,7 +2,7 @@
 
 API: https://api.vidu.cn/ent/v2
 Auth: Token header using VIDU_API_KEY
-Models: viduq2 (T2V), viduq2-pro (I2V default), viduq2-pro-fast
+Models: viduq3-pro (default), viduq3-turbo (fast)
 """
 
 import logging
