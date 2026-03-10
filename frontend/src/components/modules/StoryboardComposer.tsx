@@ -6,11 +6,11 @@ import {
     Layout, Image as ImageIcon, Box, Type, Move,
     ZoomIn, ZoomOut, Layers, Settings, Play,
     ChevronRight, ChevronLeft, Trash2, Copy, Wand2, Users, FileText, RefreshCw, Loader2, X, Lock, Unlock,
-    Plus, ArrowUp, ArrowDown, Zap
+    Plus, ArrowUp, ArrowDown, Zap, Upload, Film
 } from "lucide-react";
 import { useProjectStore } from "@/store/projectStore";
 import { api, API_URL, crudApi } from "@/lib/api";
-import { getAssetUrl, getAssetUrlWithTimestamp } from "@/lib/utils";
+import { getAssetUrl, getAssetUrlWithTimestamp, extractErrorDetail } from "@/lib/utils";
 
 import StoryboardFrameEditor from "./StoryboardFrameEditor";
 
@@ -32,6 +32,10 @@ export default function StoryboardComposer() {
     const [editingFrameId, setEditingFrameId] = useState<string | null>(null);
     const [isCreateDialogOpen, setIsCreateDialogOpen] = useState(false);
     const [insertIndex, setInsertIndex] = useState<number | null>(null);
+    const [extractingFrameId, setExtractingFrameId] = useState<string | null>(null);
+
+    const fileInputRef = useRef<HTMLInputElement>(null);
+    const [uploadTargetFrameId, setUploadTargetFrameId] = useState<string | null>(null);
 
 
 
@@ -52,11 +56,21 @@ export default function StoryboardComposer() {
         setIsAnalyzing(true);
         try {
             const updatedProject = await api.analyzeToStoryboard(currentProject.id, text);
-            updateProject(currentProject.id, updatedProject);
-            alert(`成功生成 ${updatedProject.frames?.length || 0} 个分镜帧！`);
-        } catch (error) {
+            const frameCount = updatedProject.frames?.length || 0;
+            if (frameCount > 0) {
+                updateProject(currentProject.id, updatedProject);
+                alert(`成功生成 ${frameCount} 个分镜帧！`);
+            } else {
+                alert("AI 模型未生成有效分镜帧，请重新点击按钮再试一次。");
+            }
+        } catch (error: any) {
             console.error("Analyze to storyboard failed:", error);
-            alert("分镜生成失败，请查看控制台了解详情。");
+            const detail = extractErrorDetail(error, "");
+            if (detail.includes("JSON") || detail.includes("格式")) {
+                alert(`分镜生成失败：AI 模型输出格式异常。\n\n这是模型偶发的格式问题，通常重试即可解决。请再次点击生成按钮。`);
+            } else {
+                alert(`分镜生成失败：${detail || "请查看控制台了解详情。"}`);
+            }
         } finally {
             setIsAnalyzing(false);
         }
@@ -140,6 +154,62 @@ export default function StoryboardComposer() {
             // Revert on error would be ideal here by fetching project again
             const project = await api.getProject(currentProject.id);
             updateProject(currentProject.id, project);
+        }
+    };
+
+    const handleExtractLastFrame = async (frameId: string, e: React.MouseEvent) => {
+        e.stopPropagation();
+        if (!currentProject?.frames) return;
+
+        const frameIndex = currentProject.frames.findIndex((f: any) => f.id === frameId);
+        if (frameIndex <= 0) return;
+
+        // Find the previous frame's selected video
+        const prevFrame = currentProject.frames[frameIndex - 1];
+        if (!prevFrame.selected_video_id) {
+            alert("Previous frame has no selected video.");
+            return;
+        }
+
+        const prevVideo = currentProject.video_tasks?.find(
+            (t: any) => t.id === prevFrame.selected_video_id && t.status === "completed"
+        );
+        if (!prevVideo) {
+            alert("Previous frame's video is not completed yet.");
+            return;
+        }
+
+        setExtractingFrameId(frameId);
+        try {
+            const updatedProject = await api.extractLastFrame(currentProject.id, frameId, prevVideo.id);
+            updateProject(currentProject.id, updatedProject);
+        } catch (error: any) {
+            console.error("Failed to extract last frame:", error);
+            alert(error?.response?.data?.detail || "Failed to extract last frame");
+        } finally {
+            setExtractingFrameId(null);
+        }
+    };
+
+    const handleUploadFrameImage = async (frameId: string, e: React.MouseEvent) => {
+        e.stopPropagation();
+        setUploadTargetFrameId(frameId);
+        fileInputRef.current?.click();
+    };
+
+    const handleFileSelected = async (e: React.ChangeEvent<HTMLInputElement>) => {
+        const file = e.target.files?.[0];
+        if (!file || !uploadTargetFrameId || !currentProject) return;
+
+        try {
+            const updatedProject = await api.uploadFrameImage(currentProject.id, uploadTargetFrameId, file);
+            updateProject(currentProject.id, updatedProject);
+        } catch (error: any) {
+            console.error("Failed to upload frame image:", error);
+            alert(error?.message || "Failed to upload frame image");
+        } finally {
+            setUploadTargetFrameId(null);
+            if (fileInputRef.current) fileInputRef.current.value = "";
         }
     };
 
@@ -427,21 +497,21 @@ export default function StoryboardComposer() {
                                         )}
 
                                         {/* Frame Actions */}
-                                        <div className="flex justify-end gap-2 mt-2 pt-2 border-t border-white/5 opacity-0 group-hover:opacity-100 transition-opacity">
+                                        <div className="flex justify-end gap-2 mt-2 pt-2 border-t border-white/5">
                                             <div className="flex items-center gap-1 mr-auto">
                                                 <button
                                                     onClick={(e) => handleMoveFrame(index, 'up', e)}
                                                     disabled={index === 0}
-                                                    className="p-2 hover:bg-white/10 text-gray-400 hover:text-white rounded-lg transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
-                                                    title="Move Up"
+                                                    className="btn-tip p-2 hover:bg-white/10 text-gray-400 hover:text-white rounded-lg transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
+                                                    data-tip="Move Up"
                                                 >
                                                     <ArrowUp size={14} />
                                                 </button>
                                                 <button
                                                     onClick={(e) => handleMoveFrame(index, 'down', e)}
                                                     disabled={index === (currentProject.frames?.length || 0) - 1}
-                                                    className="p-2 hover:bg-white/10 text-gray-400 hover:text-white rounded-lg transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
-                                                    title="Move Down"
+                                                    className="btn-tip p-2 hover:bg-white/10 text-gray-400 hover:text-white rounded-lg transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
+                                                    data-tip="Move Down"
                                                 >
                                                     <ArrowDown size={14} />
                                                 </button>
@@ -449,15 +519,38 @@ export default function StoryboardComposer() {
 
                                             <button
                                                 onClick={(e) => handleCopyFrame(frame.id, e)}
-                                                className="p-2 hover:bg-white/10 text-gray-400 hover:text-white rounded-lg transition-colors"
-                                                title="Duplicate Frame"
+                                                className="btn-tip p-2 hover:bg-white/10 text-gray-400 hover:text-white rounded-lg transition-colors"
+                                                data-tip="Duplicate"
                                             >
                                                 <Copy size={14} />
                                             </button>
                                             <button
+                                                onClick={(e) => handleUploadFrameImage(frame.id, e)}
+                                                className="btn-tip p-2 hover:bg-blue-500/20 text-gray-400 hover:text-blue-400 rounded-lg transition-colors"
+                                                data-tip="Upload Image"
+                                            >
+                                                <Upload size={14} />
+                                            </button>
+                                            {index > 0 && (() => {
+                                                const prevFrame = currentProject.frames?.[index - 1];
+                                                const prevVideoCompleted = prevFrame?.selected_video_id && currentProject.video_tasks?.find(
+                                                    (t: any) => t.id === prevFrame.selected_video_id && t.status === "completed"
+                                                );
+                                                return prevVideoCompleted ? (
+                                                    <button
+                                                        onClick={(e) => handleExtractLastFrame(frame.id, e)}
+                                                        disabled={extractingFrameId === frame.id}
+                                                        className="btn-tip p-2 hover:bg-purple-500/20 text-gray-400 hover:text-purple-400 rounded-lg transition-colors disabled:opacity-50"
+                                                        data-tip="Use Prev End Frame"
+                                                    >
+                                                        {extractingFrameId === frame.id ? <Loader2 size={14} className="animate-spin" /> : <Film size={14} />}
+                                                    </button>
+                                                ) : null;
+                                            })()}
+                                            <button
                                                 onClick={(e) => handleDeleteFrame(frame.id, e)}
-                                                className="p-2 hover:bg-red-500/20 text-gray-400 hover:text-red-400 rounded-lg transition-colors"
-                                                title="Delete Frame"
+                                                className="btn-tip p-2 hover:bg-red-500/20 text-gray-400 hover:text-red-400 rounded-lg transition-colors"
+                                                data-tip="Delete"
                                             >
                                                 <Trash2 size={14} />
                                             </button>
@@ -500,6 +593,15 @@ export default function StoryboardComposer() {
                     />
                 )}
             </AnimatePresence>
+
+            {/* Hidden file input for frame image upload */}
+            <input
+                ref={fileInputRef}
+                type="file"
+                accept="image/*"
+                className="hidden"
+                onChange={handleFileSelected}
+            />
         </div >
     );
 }

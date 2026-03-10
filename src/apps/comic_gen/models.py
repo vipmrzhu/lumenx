@@ -69,7 +69,7 @@ class VideoTask(BaseModel):
     prompt: str
     status: str = "pending"  # pending, processing, completed, failed
     video_url: Optional[str] = None
-    duration: int = Field(5, description="Video duration in seconds (5 or 10)")
+    duration: int = Field(5, description="Video duration in seconds (model-specific range)")
     seed: Optional[int] = Field(None, description="Random seed for reproducibility")
     resolution: str = Field("720p", description="Video resolution")
     generate_audio: bool = Field(False, description="Whether to generate audio")
@@ -80,6 +80,13 @@ class VideoTask(BaseModel):
     shot_type: str = Field("single", description="Shot type: 'single' or 'multi' (only for wan2.6-i2v)")
     generation_mode: str = Field("i2v", description="Generation mode: 'i2v' (image-to-video) or 'r2v' (reference-to-video)")
     reference_video_urls: List[str] = Field(default_factory=list, description="Reference video URLs for R2V generation (max 3)")
+    # Kling params
+    mode: Optional[str] = Field(None, description="Kling mode: std/pro")
+    sound: Optional[str] = Field(None, description="Kling sound: on/off")
+    cfg_scale: Optional[float] = Field(None, description="Kling cfg_scale: 0-1")
+    # Vidu params
+    vidu_audio: Optional[bool] = Field(None, description="Vidu audio output")
+    movement_amplitude: Optional[str] = Field(None, description="Vidu movement amplitude: auto/small/medium/large")
     created_at: float = Field(default_factory=time.time)
 
 class Character(BaseModel):

@@ -2,10 +2,10 @@
 
 import { useState, useEffect, useMemo } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { Play, Check, ChevronRight, Loader2, Film, AlertTriangle, Layout, Clock, FileText } from "lucide-react";
+import { Play, Check, ChevronRight, Loader2, Film, AlertTriangle, Layout, Clock, FileText, Download } from "lucide-react";
 import { useProjectStore } from "@/store/projectStore";
 import { api, API_URL } from "@/lib/api";
-import { getAssetUrl } from "@/lib/utils";
+import { getAssetUrl, extractErrorDetail } from "@/lib/utils";
 
 export default function VideoAssembly() {
     const currentProject = useProjectStore((state) => state.currentProject);
@@ -14,6 +14,7 @@ export default function VideoAssembly() {
     const [selectedFrameId, setSelectedFrameId] = useState<string | null>(null);
     const [isMerging, setIsMerging] = useState(false);
     const [mergeError, setMergeError] = useState<string | null>(null);
+    const [isDownloading, setIsDownloading] = useState(false);
 
     // Group videos by frame
     const videosByFrame = useMemo(() => {
@@ -54,10 +55,7 @@ export default function VideoAssembly() {
             console.error("Failed to merge videos:", error);
 
             // Extract detailed error message from backend
-            const errorDetail = error.response?.data?.detail ||
-                error.response?.data?.message ||
-                error.message ||
-                "Unknown error occurred during video merge";
+            const errorDetail = extractErrorDetail(error, "Unknown error occurred during video merge");
 
             setMergeError(errorDetail);
 
@@ -68,6 +66,35 @@ export default function VideoAssembly() {
         }
     };
 
+
+    const handleDownload = async () => {
+        if (!currentProject?.merged_video_url) return;
+        setIsDownloading(true);
+        try {
+            // Build download URL - use proxy in dev to avoid CORS, direct in production
+            const rawPath = currentProject.merged_video_url;
+            const cleanPath = rawPath.startsWith("/") ? rawPath.slice(1) : rawPath;
+            const isDev = process.env.NODE_ENV === "development";
+            const url = isDev
+                ? `/api-proxy/files/${cleanPath}`
+                : getAssetUrl(rawPath);
+
+            const response = await fetch(url);
+            if (!response.ok) throw new Error(`HTTP ${response.status}`);
+            const blob = await response.blob();
+            const blobUrl = URL.createObjectURL(blob);
+            const a = document.createElement("a");
+            a.href = blobUrl;
+            a.download = `${currentProject.title || "merged"}_${currentProject.id}.mp4`;
+            a.click();
+            setTimeout(() => URL.revokeObjectURL(blobUrl), 60_000);
+        } catch (error) {
+            console.error("Failed to download video:", error);
+            alert("Failed to download video. Please try again.");
+        } finally {
+            setIsDownloading(false);
+        }
+    };
 
     const selectedFrame = useMemo(() => {
         return currentProject?.frames?.find((f: any) => f.id === selectedFrameId);
@@ -125,10 +152,14 @@ export default function VideoAssembly() {
                                             />
                                         ) : (
                                             <div className="w-full h-full relative">
-                                                <img
-                                                    src={getAssetUrl(frame.image_url)}
-                                                    className="w-full h-full object-cover opacity-50 grayscale"
-                                                />
+                                                {frame.image_url ? (
+                                                    <img
+                                                        src={getAssetUrl(frame.image_url)}
+                                                        className="w-full h-full object-cover opacity-50 grayscale"
+                                                    />
+                                                ) : (
+                                                    <div className="w-full h-full bg-white/5" />
+                                                )}
                                                 <div className="absolute inset-0 flex items-center justify-center">
                                                     {hasVideos ? (
                                                         <div className="bg-yellow-500/20 text-yellow-500 px-2 py-1 rounded text-xs font-bold border border-yellow-500/50">
@@ -343,13 +374,14 @@ export default function VideoAssembly() {
                                 </div>
 
                                 <div className="flex gap-4">
-                                    <a
-                                        href={getAssetUrl(currentProject.merged_video_url)}
-                                        download={`merged_${currentProject.id}.mp4`}
-                                        className="px-6 py-3 bg-white/10 hover:bg-white/20 text-white rounded-lg font-bold flex items-center gap-2 transition-colors"
+                                    <button
+                                        onClick={handleDownload}
+                                        disabled={isDownloading}
+                                        className="px-6 py-3 bg-white/10 hover:bg-white/20 text-white rounded-lg font-bold flex items-center gap-2 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                                     >
-                                        Download MP4
-                                    </a>
+                                        <Download size={18} />
+                                        {isDownloading ? "Downloading..." : "Download MP4"}
+                                    </button>
                                     {/* Optional: Proceed Button if needed, or user uses sidebar */}
                                 </div>
                             </div>

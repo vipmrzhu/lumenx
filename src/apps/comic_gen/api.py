@@ -4,6 +4,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from typing import Optional, Dict, List, Any
 import asyncio
+import time
 from concurrent.futures import ThreadPoolExecutor
 from functools import partial
 import os
@@ -262,6 +263,9 @@ class EnvConfig(BaseModel):
     OSS_BUCKET_NAME: Optional[str] = None
     OSS_ENDPOINT: Optional[str] = None
     OSS_BASE_PATH: Optional[str] = None
+    KLING_ACCESS_KEY: Optional[str] = None
+    KLING_SECRET_KEY: Optional[str] = None
+    VIDU_API_KEY: Optional[str] = None
 
 
 def get_user_config_path() -> str:
@@ -670,6 +674,13 @@ class CreateVideoTaskRequest(BaseModel):
     shot_type: str = "single"  # 'single' or 'multi' (only for wan2.6-i2v)
     generation_mode: str = "i2v"  # 'i2v' (image-to-video) or 'r2v' (reference-to-video)
     reference_video_urls: List[str] = []  # Reference video URLs for R2V (max 3)
+    # Kling params
+    mode: Optional[str] = None
+    sound: Optional[str] = None
+    cfg_scale: Optional[float] = None
+    # Vidu params
+    vidu_audio: Optional[bool] = None
+    movement_amplitude: Optional[str] = None
 
 
 async def process_video_task(script_id: str, task_id: str):
@@ -701,7 +712,12 @@ async def create_video_task(script_id: str, request: CreateVideoTaskRequest, bac
                 model=request.model,
                 shot_type=request.shot_type,
                 generation_mode=request.generation_mode,
-                reference_video_urls=request.reference_video_urls
+                reference_video_urls=request.reference_video_urls,
+                mode=request.mode,
+                sound=request.sound,
+                cfg_scale=request.cfg_scale,
+                vidu_audio=request.vidu_audio,
+                movement_amplitude=request.movement_amplitude,
             )
 
             # Find the created task object
@@ -1239,6 +1255,46 @@ async def select_video(script_id: str, frame_id: str, request: SelectVideoReques
         raise HTTPException(status_code=500, detail=str(e))
 
 
+class ExtractLastFrameRequest(BaseModel):
+    video_task_id: str
+
+
+@app.post("/projects/{script_id}/frames/{frame_id}/extract_last_frame")
+async def extract_last_frame(script_id: str, frame_id: str, request: ExtractLastFrameRequest):
+    """Extract the last frame from a completed video and add it as a variant to the frame's rendered_image_asset."""
+    try:
+        updated_script = pipeline.extract_last_frame(script_id, frame_id, request.video_task_id)
+        return signed_response(updated_script)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except RuntimeError as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    except Exception as e:
+        logger.exception(f"Error extracting last frame: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/projects/{script_id}/frames/{frame_id}/upload_image")
+async def upload_frame_image(script_id: str, frame_id: str, file: UploadFile = File(...)):
+    """Upload an image as a variant for a frame's rendered_image_asset."""
+    try:
+        # Save file locally first
+        file_ext = os.path.splitext(file.filename)[1]
+        filename = f"{uuid.uuid4()}{file_ext}"
+        file_path = os.path.join("output/uploads", filename)
+
+        with open(file_path, "wb") as buffer:
+            shutil.copyfileobj(file.file, buffer)
+
+        updated_script = pipeline.upload_frame_image(script_id, frame_id, file_path)
+        return signed_response(updated_script)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        logger.exception(f"Error uploading frame image: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @app.post("/projects/{script_id}/merge", response_model=Script)
 async def merge_videos(script_id: str):
     """Merge all selected frame videos into final output"""
@@ -1394,15 +1450,6 @@ async def polish_r2v_prompt(request: PolishR2VPromptRequest):
 
 # ===== Environment Configuration Endpoints =====
 
-class EnvConfig(BaseModel):
-    DASHSCOPE_API_KEY: Optional[str] = None
-    ALIBABA_CLOUD_ACCESS_KEY_ID: Optional[str] = None
-    ALIBABA_CLOUD_ACCESS_KEY_SECRET: Optional[str] = None
-    OSS_BUCKET_NAME: Optional[str] = None
-    OSS_ENDPOINT: Optional[str] = None
-    OSS_BASE_PATH: Optional[str] = None
-
-
 @app.get("/config/env")
 async def get_env_config():
     """Get current environment configuration."""
@@ -1413,7 +1460,10 @@ async def get_env_config():
             "ALIBABA_CLOUD_ACCESS_KEY_SECRET": os.getenv("ALIBABA_CLOUD_ACCESS_KEY_SECRET", ""),
             "OSS_BUCKET_NAME": os.getenv("OSS_BUCKET_NAME", ""),
             "OSS_ENDPOINT": os.getenv("OSS_ENDPOINT", ""),
-            "OSS_BASE_PATH": os.getenv("OSS_BASE_PATH", "")
+            "OSS_BASE_PATH": os.getenv("OSS_BASE_PATH", ""),
+            "KLING_ACCESS_KEY": os.getenv("KLING_ACCESS_KEY", ""),
+            "KLING_SECRET_KEY": os.getenv("KLING_SECRET_KEY", ""),
+            "VIDU_API_KEY": os.getenv("VIDU_API_KEY", ""),
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))

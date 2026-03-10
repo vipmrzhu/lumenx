@@ -23,19 +23,17 @@ class AudioGenerator:
     def get_available_voices(self) -> List[Dict[str, str]]:
         """Returns a list of available voices."""
         if self.tts:
-            # Get voices from TTSProcessor
             voices_dict = TTSProcessor.list_voices()
             return [
-                {"id": key, "name": f"{key} - CosyVoice", "gender": "Unknown"}
-                for key in voices_dict.keys()
+                {"id": key, "name": f"{meta['name']} - CosyVoice", "gender": meta.get('gender', 'Unknown')}
+                for key, meta in voices_dict.items()
             ]
         else:
-            # Fallback to mock voices
             return [
-                {"id": "longxiaochun", "name": "龙小淳 (Sweet Female)", "gender": "Female"},
-                {"id": "zhitian_emo", "name": "智甜 (Emotional Female)", "gender": "Female"},
-                {"id": "zhiyan_emo", "name": "智言 (Emotional Male)", "gender": "Male"},
-                {"id": "zhishu", "name": "智书 (Narrator)", "gender": "Male"},
+                {"id": "longxiaochun", "name": "龙小淳 (知性女) - CosyVoice", "gender": "Female"},
+                {"id": "longyue", "name": "龙悦 (温柔女) - CosyVoice", "gender": "Female"},
+                {"id": "longcheng", "name": "龙诚 (睿智青年) - CosyVoice", "gender": "Male"},
+                {"id": "longshu", "name": "龙书 (播报男) - CosyVoice", "gender": "Male"},
             ]
 
     def generate_dialogue(self, frame: StoryboardFrame, character: Character, speed: float = 1.0, pitch: float = 1.0) -> StoryboardFrame:
@@ -71,8 +69,8 @@ class AudioGenerator:
             # Use character's assigned voice
             voice = character.voice_id
             
-            # Call TTSProcessor
-            self.tts.synthesize(text, output_path, voice=voice)
+            # Call TTSProcessor with speed/pitch
+            self.tts.synthesize(text, output_path, voice=voice, speech_rate=speed, pitch_rate=pitch)
             
             # Store relative path for frontend serving
             rel_path = os.path.relpath(output_path, "output")

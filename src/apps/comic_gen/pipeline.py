@@ -1,6 +1,7 @@
 from typing import Dict, Any, List, Optional, Tuple
 import json
 import os
+import re
 import time
 import uuid
 import subprocess
@@ -20,6 +21,31 @@ from ...utils.system_check import get_ffmpeg_path, get_ffmpeg_install_instructio
 
 logger = get_logger(__name__)
 
+# --- Security helpers ---
+
+# Allowed pattern for IDs used in file paths (UUID hex + hyphens)
+_SAFE_ID_RE = re.compile(r'^[a-zA-Z0-9_\-]+$')
+
+
+def _validate_safe_id(value: str, label: str = "id") -> str:
+    """Ensure a value is safe to embed in file paths / command args (UUID-like)."""
+    if not value or not _SAFE_ID_RE.match(value):
+        raise ValueError(f"Invalid {label}: contains unsafe characters")
+    return value
+
+
+def _safe_resolve_path(base_dir: str, untrusted_rel: str) -> str:
+    """Resolve *untrusted_rel* under *base_dir* and ensure the result stays inside it.
+
+    Prevents path-traversal attacks (e.g. ``../../etc/passwd``).
+    Returns the resolved absolute path; raises ValueError on escape attempts.
+    """
+    base = os.path.realpath(base_dir)
+    resolved = os.path.realpath(os.path.join(base, untrusted_rel))
+    if not resolved.startswith(base + os.sep) and resolved != base:
+        raise ValueError(f"Path escapes base directory: {untrusted_rel}")
+    return resolved
+
 class ComicGenPipeline:
     def __init__(self, config: Dict[str, Any] = None):
         self.config = config or {}
@@ -38,6 +64,9 @@ class ComicGenPipeline:
         # Format: { task_id: { status: str, progress: int, error: str, script_id: str, asset_id: str, created_at: float } }
         self.asset_generation_tasks: Dict[str, Dict[str, Any]] = {}
         self.video_generation_tasks: Dict[str, Dict[str, Any]] = {}
+        # Cached model instances for Kling/Vidu (lazily initialized)
+        self._kling_model = None
+        self._vidu_model = None
 
     # ... (existing methods)
 
@@ -770,8 +799,11 @@ class ComicGenPipeline:
             "props": [{"id": p.id, "name": p.name, "description": p.description} for p in script.props],
         }
         
-        # Call LLM to analyze text
+        # Call LLM to analyze text (may raise RuntimeError on parse failure)
         raw_frames = self.script_processor.analyze_to_storyboard(text, entities_json)
+
+        if not raw_frames:
+            raise RuntimeError("AI 分镜分析未返回任何帧数据，请重试。")
         
         # Convert raw frame dicts to StoryboardFrame objects
         new_frames = []
@@ -1185,9 +1217,9 @@ class ComicGenPipeline:
                 if is_object_key(url) or url.startswith("http"):
                     ref_image_paths.append(url)
                 else:
-                    potential_path = os.path.join("output", url)
+                    potential_path = _safe_resolve_path("output", url)
                     if os.path.exists(potential_path):
-                        ref_image_paths.append(os.path.abspath(potential_path))
+                        ref_image_paths.append(potential_path)
             
             # Also handle single path if provided (legacy support)
             if ref_image_url and ref_image_url not in ref_image_urls:
@@ -1195,11 +1227,10 @@ class ComicGenPipeline:
                     if ref_image_url not in ref_image_paths:
                         ref_image_paths.append(ref_image_url)
                 else:
-                    potential_path = os.path.join("output", ref_image_url)
+                    potential_path = _safe_resolve_path("output", ref_image_url)
                     if os.path.exists(potential_path):
-                        abs_path = os.path.abspath(potential_path)
-                        if abs_path not in ref_image_paths:
-                            ref_image_paths.append(abs_path)
+                        if potential_path not in ref_image_paths:
+                            ref_image_paths.append(potential_path)
             
             # Use the first path as ref_image_path for legacy generator support if needed
             ref_image_path = ref_image_paths[0] if ref_image_paths else None
@@ -1273,7 +1304,7 @@ class ComicGenPipeline:
         self._save_data()
         return script
 
-    def create_video_task(self, script_id: str, image_url: str, prompt: str, duration: int = 5, seed: int = None, resolution: str = "720p", generate_audio: bool = False, audio_url: str = None, prompt_extend: bool = True, negative_prompt: str = None, model: str = "wan2.6-i2v", frame_id: str = None, shot_type: str = "single", generation_mode: str = "i2v", reference_video_urls: list = None) -> Tuple[Script, str]:
+    def create_video_task(self, script_id: str, image_url: str, prompt: str, duration: int = 5, seed: int = None, resolution: str = "720p", generate_audio: bool = False, audio_url: str = None, prompt_extend: bool = True, negative_prompt: str = None, model: str = "wan2.6-i2v", frame_id: str = None, shot_type: str = "single", generation_mode: str = "i2v", reference_video_urls: list = None, mode: str = None, sound: str = None, cfg_scale: float = None, vidu_audio: bool = None, movement_amplitude: str = None) -> Tuple[Script, str]:
         """Creates a new video generation task."""
         script = self.get_script(script_id)
         if not script:
@@ -1291,16 +1322,17 @@ class ComicGenPipeline:
             # Resolve source path
             if image_url and not image_url.startswith("http"):
                 # Assume relative to output dir
-                src_path = os.path.join("output", image_url)
+                src_path = _safe_resolve_path("output", image_url)
                 if os.path.exists(src_path) and os.path.isfile(src_path):
                     # Create snapshot dir
                     snapshot_dir = os.path.join("output", "video_inputs")
                     os.makedirs(snapshot_dir, exist_ok=True)
-                    
+
                     # Define snapshot path
-                    ext = os.path.splitext(image_url)[1] or ".png"
+                    ext = os.path.splitext(os.path.basename(image_url))[1] or ".png"
+                    _validate_safe_id(task_id, "task_id")
                     snapshot_filename = f"{task_id}{ext}"
-                    snapshot_path = os.path.join(snapshot_dir, snapshot_filename)
+                    snapshot_path = _safe_resolve_path(snapshot_dir, snapshot_filename)
                     
                     # Copy file
                     import shutil
@@ -1330,6 +1362,11 @@ class ComicGenPipeline:
             shot_type=shot_type,
             generation_mode=generation_mode,
             reference_video_urls=reference_video_urls or [],
+            mode=mode,
+            sound=sound,
+            cfg_scale=cfg_scale,
+            vidu_audio=vidu_audio,
+            movement_amplitude=movement_amplitude,
             created_at=time.time()
         )
         
@@ -1340,6 +1377,134 @@ class ComicGenPipeline:
         self._save_data()
         return script, task_id
 
+    def extract_last_frame(self, script_id: str, frame_id: str, video_task_id: str) -> Script:
+        """Extract the last frame from a video task and add it as a variant of the frame's rendered_image_asset."""
+        from .models import ImageVariant, ImageAsset
+
+        script = self.get_script(script_id)
+        if not script:
+            raise ValueError("Script not found")
+
+        frame = next((f for f in script.frames if f.id == frame_id), None)
+        if not frame:
+            raise ValueError("Frame not found")
+
+        # Find the video task
+        video_task = next((t for t in script.video_tasks if t.id == video_task_id), None)
+        if not video_task or video_task.status != "completed" or not video_task.video_url:
+            raise ValueError("Video task not found or not completed")
+
+        # Resolve video path
+        video_path = video_task.video_url
+        if not video_path.startswith("/") and not video_path.startswith("http"):
+            video_path = _safe_resolve_path("output", video_path)
+
+        if video_path.startswith("http"):
+            # Download to temp file first
+            video_path = self._download_temp_image(video_path)
+
+        if not os.path.exists(video_path):
+            raise ValueError(f"Video file not found: {video_path}")
+
+        # Extract last frame using FFmpeg
+        ffmpeg_path = get_ffmpeg_path()
+        if not ffmpeg_path:
+            raise RuntimeError("FFmpeg is required for frame extraction but was not found.")
+
+        output_dir = os.path.join("output", "storyboard")
+        os.makedirs(output_dir, exist_ok=True)
+        _validate_safe_id(frame_id, "frame_id")
+        output_filename = f"frame_{frame_id}_lastframe_{uuid.uuid4().hex[:8]}.jpg"
+        output_path = _safe_resolve_path(output_dir, output_filename)
+
+        cmd = [
+            ffmpeg_path, "-sseof", "-0.1",
+            "-i", video_path,
+            "-frames:v", "1",
+            "-q:v", "2",
+            "-y", output_path
+        ]
+
+        try:
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+            if result.returncode != 0:
+                raise RuntimeError(f"FFmpeg error: {result.stderr}")
+        except subprocess.TimeoutExpired:
+            raise RuntimeError("FFmpeg frame extraction timed out")
+
+        if not os.path.exists(output_path):
+            raise RuntimeError("Failed to extract last frame from video")
+
+        # Upload to OSS if configured
+        from ...utils.oss_utils import OSSImageUploader
+        uploader = OSSImageUploader()
+        oss_url = uploader.upload_image(output_path)
+        image_url = oss_url if oss_url else os.path.relpath(output_path, "output")
+
+        # Create new variant
+        variant = ImageVariant(
+            id=str(uuid.uuid4()),
+            url=image_url,
+            prompt_used="Extracted last frame from video",
+            is_uploaded_source=True,
+            upload_type="image",
+        )
+
+        # Initialize rendered_image_asset if needed
+        if not frame.rendered_image_asset:
+            frame.rendered_image_asset = ImageAsset()
+
+        frame.rendered_image_asset.variants.append(variant)
+        frame.rendered_image_asset.selected_id = variant.id
+        # Also update rendered_image_url so VideoCreator can pick it up
+        frame.rendered_image_url = image_url
+
+        script.updated_at = time.time()
+        self._save_data()
+        return script
+
+    def upload_frame_image(self, script_id: str, frame_id: str, image_path: str) -> Script:
+        """Upload an image as a variant of the frame's rendered_image_asset."""
+        from .models import ImageVariant, ImageAsset
+
+        # Validate that image_path is inside the output directory
+        safe_path = _safe_resolve_path("output", os.path.relpath(image_path, "output") if os.path.isabs(image_path) else image_path)
+
+        script = self.get_script(script_id)
+        if not script:
+            raise ValueError("Script not found")
+
+        frame = next((f for f in script.frames if f.id == frame_id), None)
+        if not frame:
+            raise ValueError("Frame not found")
+
+        # Upload to OSS if configured
+        from ...utils.oss_utils import OSSImageUploader
+        uploader = OSSImageUploader()
+        oss_url = uploader.upload_image(safe_path)
+        image_url = oss_url if oss_url else os.path.relpath(safe_path, "output")
+
+        # Create new variant
+        variant = ImageVariant(
+            id=str(uuid.uuid4()),
+            url=image_url,
+            prompt_used="User uploaded image",
+            is_uploaded_source=True,
+            upload_type="image",
+        )
+
+        if not frame.rendered_image_asset:
+            frame.rendered_image_asset = ImageAsset()
+
+        frame.rendered_image_asset.variants.append(variant)
+        frame.rendered_image_asset.selected_id = variant.id
+        # Also update rendered_image_url so VideoCreator can pick it up
+        frame.rendered_image_url = image_url
+
+        script.updated_at = time.time()
+        self._save_data()
+        return script
+
     def _download_temp_image(self, url: str) -> str:
         """Downloads an image to a temporary file."""
         import requests
@@ -1347,12 +1512,9 @@ class ComicGenPipeline:
         
         # If it's a local file path (relative to output)
         if not url.startswith("http"):
-            local_path = os.path.join("output", url)
+            local_path = _safe_resolve_path("output", url)
             if os.path.exists(local_path):
                 return local_path
-            # Try absolute path if it exists
-            if os.path.exists(url):
-                return url
                 
         # Download from URL
         try:
@@ -1393,6 +1555,7 @@ class ComicGenPipeline:
 
     def merge_videos(self, script_id: str) -> Script:
         """Step 5b: Merge selected videos into a single file."""
+        _validate_safe_id(script_id, "script_id")
         script = self.scripts.get(script_id)
         if not script:
             raise ValueError("Script not found")
@@ -1457,14 +1620,14 @@ class ComicGenPipeline:
         logger.info(f"[MERGE] Found {len(video_paths)} videos to merge")
             
         # Create file list for ffmpeg
-        list_path = os.path.join("output", f"merge_list_{script_id}.txt")
+        list_path = _safe_resolve_path("output", f"merge_list_{script_id}.txt")
         abs_video_paths = []
-        
+
         with open(list_path, "w") as f:
             for path in video_paths:
                 # Resolve to absolute path
                 if not path.startswith("http"):
-                    abs_path = os.path.abspath(os.path.join("output", path))
+                    abs_path = _safe_resolve_path("output", path)
                     if os.path.exists(abs_path):
                         f.write(f"file '{abs_path}'\n")
                         abs_video_paths.append(abs_path)
@@ -1480,7 +1643,7 @@ class ComicGenPipeline:
 
         # Output path
         output_filename = f"merged_{script_id}_{int(time.time())}.mp4"
-        output_path = os.path.join("output", "video", output_filename)
+        output_path = _safe_resolve_path(os.path.join("output", "video"), output_filename)
         os.makedirs(os.path.dirname(output_path), exist_ok=True)
         
         logger.debug(f"[MERGE] Output path: {output_path}")
@@ -1755,27 +1918,67 @@ class ComicGenPipeline:
 
             # Ensure img_url is passed correctly for OSS
             img_url = task.image_url
-            
-            video_path, _ = self.video_generator.model.generate(
-                prompt=task.prompt,
-                output_path=output_path,
-                img_path=img_path,
-                img_url=img_url,
-                duration=task.duration,
-                seed=task.seed,
-                resolution=task.resolution,
-                # Pass new params
-                audio_url=final_audio_url,
-                audio=final_generate_audio, # Pass as 'audio' to match Wan API expectation if needed, or keep generate_audio
-                prompt_extend=task.prompt_extend,
-                negative_prompt=task.negative_prompt,
-                model=task.model,
-                shot_type=task.shot_type,  # Pass shot_type for wan2.6-i2v (single/multi)
-                ref_video_urls=task.reference_video_urls if task.generation_mode == "r2v" else None,  # R2V reference videos
-                # Legacy params mapped or ignored
-                camera_motion=None, 
-                subject_motion=None
-            )
+
+            # Route to the appropriate model based on task.model
+            model_prefix = (task.model or "").split("-")[0] if task.model else ""
+
+            if model_prefix in ("kling",):
+                # Use Kling model (cached)
+                if self._kling_model is None:
+                    from ...models.kling import KlingModel
+                    self._kling_model = KlingModel({})
+                video_path, _ = self._kling_model.generate(
+                    prompt=task.prompt,
+                    output_path=output_path,
+                    img_url=img_url,
+                    img_path=img_path,
+                    duration=task.duration,
+                    model=task.model,
+                    negative_prompt=task.negative_prompt,
+                    aspect_ratio="16:9",
+                    mode=task.mode or "std",
+                    sound=task.sound or "off",
+                    cfg_scale=task.cfg_scale,
+                )
+            elif model_prefix in ("vidu", "viduq2", "viduq3"):
+                # Use Vidu model (cached)
+                if self._vidu_model is None:
+                    from ...models.vidu import ViduModel
+                    self._vidu_model = ViduModel({})
+                video_path, _ = self._vidu_model.generate(
+                    prompt=task.prompt,
+                    output_path=output_path,
+                    img_url=img_url,
+                    img_path=img_path,
+                    duration=task.duration,
+                    model=task.model,
+                    resolution=task.resolution,
+                    aspect_ratio="16:9",
+                    seed=task.seed or 0,
+                    audio=task.vidu_audio if task.vidu_audio is not None else True,
+                    movement_amplitude=task.movement_amplitude or "auto",
+                )
+            else:
+                # Default: Wanx model
+                video_path, _ = self.video_generator.model.generate(
+                    prompt=task.prompt,
+                    output_path=output_path,
+                    img_path=img_path,
+                    img_url=img_url,
+                    duration=task.duration,
+                    seed=task.seed,
+                    resolution=task.resolution,
+                    # Pass new params
+                    audio_url=final_audio_url,
+                    audio=final_generate_audio,
+                    prompt_extend=task.prompt_extend,
+                    negative_prompt=task.negative_prompt,
+                    model=task.model,
+                    shot_type=task.shot_type,
+                    ref_video_urls=task.reference_video_urls if task.generation_mode == "r2v" else None,
+                    camera_motion=None,
+                    subject_motion=None
+                )
             
             task.video_url = os.path.relpath(output_path, "output")
             task.status = "completed"

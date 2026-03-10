@@ -100,7 +100,14 @@ export const api = {
         frameId?: string,
         shotType: string = "single",  // 'single' or 'multi' (only for wan2.6-i2v)
         generationMode: string = "i2v",  // 'i2v' or 'r2v'
-        referenceVideoUrls: string[] = []  // Reference videos for R2V (max 3)
+        referenceVideoUrls: string[] = [],  // Reference videos for R2V (max 3)
+        // Kling params
+        mode?: string,
+        sound?: boolean,
+        cfgScale?: number,
+        // Vidu params
+        viduAudio?: boolean,
+        movementAmplitude?: string
     ) => {
         const res = await axios.post(`${API_URL}/projects/${id}/video_tasks`, {
             image_url,
@@ -117,7 +124,14 @@ export const api = {
             frame_id: frameId,
             shot_type: shotType,
             generation_mode: generationMode,
-            reference_video_urls: referenceVideoUrls
+            reference_video_urls: referenceVideoUrls,
+            // Kling
+            mode,
+            sound: sound != null ? (sound ? "on" : "off") : undefined,
+            cfg_scale: cfgScale,
+            // Vidu
+            vidu_audio: viduAudio,
+            movement_amplitude: movementAmplitude
         });
         return res.data;
     },
@@ -494,6 +508,27 @@ export const api = {
             timeout: 60000, // 60 seconds timeout
         });
         return res.data;
+    },
+
+    extractLastFrame: async (scriptId: string, frameId: string, videoTaskId: string) => {
+        const res = await axios.post(`${API_URL}/projects/${scriptId}/frames/${frameId}/extract_last_frame`, {
+            video_task_id: videoTaskId,
+        });
+        return res.data;
+    },
+
+    uploadFrameImage: async (scriptId: string, frameId: string, file: File) => {
+        const formData = new FormData();
+        formData.append("file", file);
+        const response = await fetch(
+            `${API_URL}/projects/${scriptId}/frames/${frameId}/upload_image`,
+            { method: "POST", body: formData }
+        );
+        if (!response.ok) {
+            const errorData = await response.json();
+            throw new Error(errorData.detail || "Failed to upload frame image");
+        }
+        return response.json();
     },
 };
 
